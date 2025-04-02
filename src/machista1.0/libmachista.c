@@ -63,6 +63,25 @@
 #include "hashmap.h"
 #include "strlcpy.h"
 
+#ifdef __MACH__
+/* Tiger compatibility */
+#ifndef LC_RPATH
+#define LC_RPATH       (0x1c | LC_REQ_DYLD)    /* runpath additions */
+/*
+ * The rpath_command contains a path which at runtime should be added to
+ * the current run path used to find @rpath prefixed dylibs.
+ */
+struct rpath_command {
+    uint32_t     cmd;       /* LC_RPATH */
+    uint32_t     cmdsize;   /* includes string */
+    union lc_str path;      /* path to add to run path */
+};
+#endif
+#ifndef LC_REEXPORT_DYLIB
+#define LC_REEXPORT_DYLIB (0x1f | LC_REQ_DYLD) /* load and re-export dylib */
+#endif
+#endif /* __MACH__ */
+
 typedef struct macho_input {
     const void *data;
     size_t length;
@@ -533,7 +552,17 @@ void macho_destroy_handle(macho_handle_t *handle) {
 /* Returns string representation of the MACHO_* error code constants */
 const char *macho_strerror(int err) {
 #ifdef __MACH__
-    int num = fls(err);
+    int num;
+#ifdef HAVE_FLS
+    num = fls(err);
+#else /* !HAVE_FLS */
+    /* Tiger compatibility, see #42186 */
+    num = 0;
+    while (err > 0) {
+        err >>= 1;
+        num++;
+    }
+#endif /* !HAVE_FLS */
 
     static char *errors[] = {
         /* 0x00 */ "Success",
