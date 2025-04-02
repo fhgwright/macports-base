@@ -60,7 +60,7 @@ proc portpkg::pkg_start {args} {
     global packagemaker_path xcodeversion porturl \
            package.resources package.scripts package.flat \
            subport version revision description long_description \
-           homepage workpath
+           homepage workpath os.major
     variable packagemaker
     variable pkgbuild
     variable language
@@ -101,7 +101,7 @@ proc portpkg::pkg_start {args} {
     write_welcome_html ${package.resources}/${language}.lproj/Welcome.html $subport $version $revision $pkg_long_description $pkg_description $pkg_homepage
     file copy -force -- [getportresourcepath $porturl "port1.0/package/background.tiff"] ${package.resources}/${language}.lproj/background.tiff
 
-    if {${package.flat}} {
+    if {${package.flat} && ${os.major} >= 9} {
         write_distribution "${workpath}/Distribution" $subport $version $revision
     }
 }
@@ -154,46 +154,52 @@ proc portpkg::package_pkg {portname portepoch portversion portrevision} {
 
     set using_pkgbuild [expr {$pkgbuild ne "" && ${package.flat}}]
     if {$using_pkgbuild || [file exists "$packagemaker"]} {
-        if {${package.flat}} {
-            set pkgtarget "10.5"
-            set pkgresources " --scripts [shellescape ${package.scripts}]"
-            set infofile "${workpath}/PackageInfo"
-            write_package_info $infofile
-        } else {
-            set pkgtarget "10.3"
-            set pkgresources " --resources [shellescape ${package.resources}] --title \"$portname-$portversion\""
-            set infofile "${workpath}/Info.plist"
-            write_info_plist $infofile $portname $portversion $portrevision
-        }
-        if {$using_pkgbuild} {
-            set cmdline "$pkgbuild --root [shellescape ${destpath}] ${pkgresources} --info [shellescape $infofile] --install-location / --identifier org.macports.$portname"
-        } else {
-            set cmdline "PMResourceLocale=${language} [shellescape $packagemaker] --root [shellescape ${destpath}] --out [shellescape ${pkgpath}] ${pkgresources} --info [shellescape $infofile] --target $pkgtarget --domain system --id org.macports.$portname"
-        }
-        if {${os.major} >= 10} {
-            set v [mp_version_to_apple_version $portepoch $portversion $portrevision]
-            append cmdline " --version $v"
-            if {!$using_pkgbuild} {
-                append cmdline " --no-relocate"
+        if {${os.major} >= 9} {
+            if {${package.flat}} {
+                set pkgtarget "10.5"
+                set pkgresources " --scripts [shellescape ${package.scripts}]"
+                set infofile "${workpath}/PackageInfo"
+                write_package_info $infofile
             } else {
-                append cmdline " ${pkgpath}"
+                set pkgtarget "10.3"
+                set pkgresources " --resources [shellescape ${package.resources}] --title \"$portname-$portversion\""
+                set infofile "${workpath}/Info.plist"
+                write_info_plist $infofile $portname $portversion $portrevision
             }
-        } else {
-            # 10.5 Leopard does not use current language, manually specify
-            append cmdline " -AppleLanguages \"(${language})\""
-        }
-        ui_debug "Running command line: $cmdline"
-        system $cmdline
-
-        if {${package.flat} && ${os.major} >= 10} {
-            # the package we just built is just a component
-            set componentpath "[file rootname ${pkgpath}]-component.pkg"
-            file rename -force ${pkgpath} ${componentpath}
-            # Generate a distribution
-            set productbuild [findBinary productbuild]
-            set cmdline "$productbuild --resources [shellescape ${package.resources}] --identifier org.macports.${portname} --distribution [shellescape ${workpath}/Distribution] --package-path [shellescape ${package.destpath}] [shellescape ${pkgpath}]"
+            if {$using_pkgbuild} {
+                set cmdline "$pkgbuild --root [shellescape ${destpath}] ${pkgresources} --info [shellescape $infofile] --install-location / --identifier org.macports.$portname"
+            } else {
+                set cmdline "PMResourceLocale=${language} [shellescape $packagemaker] --root [shellescape ${destpath}] --out [shellescape ${pkgpath}] ${pkgresources} --info [shellescape $infofile] --target $pkgtarget --domain system --id org.macports.$portname"
+            }
+            if {${os.major} >= 10} {
+                set v [mp_version_to_apple_version $portepoch $portversion $portrevision]
+                append cmdline " --version $v"
+                if {!$using_pkgbuild} {
+                    append cmdline " --no-relocate"
+                } else {
+                    append cmdline " ${pkgpath}"
+                }
+            } else {
+                # 10.5 Leopard does not use current language, manually specify
+                append cmdline " -AppleLanguages \"(${language})\""
+            }
             ui_debug "Running command line: $cmdline"
             system $cmdline
+
+            if {${package.flat} && ${os.major} >= 10} {
+                # the package we just built is just a component
+                set componentpath "[file rootname ${pkgpath}]-component.pkg"
+                file rename -force ${pkgpath} ${componentpath}
+                # Generate a distribution
+                set productbuild [findBinary productbuild]
+                set cmdline "$productbuild --resources [shellescape ${package.resources}] --identifier org.macports.${portname} --distribution [shellescape ${workpath}/Distribution] --package-path [shellescape ${package.destpath}] [shellescape ${pkgpath}]"
+                ui_debug "Running command line: $cmdline"
+                system $cmdline
+            }
+        } else {
+            write_info_plist ${workpath}/Info.plist $portname $portversion $portrevision
+            write_description_plist ${workpath}/Description.plist $portname $portversion $description
+            system "[shellescape $packagemaker] -build -f [shellescape ${destpath}] -p [shellescape ${pkgpath}] -r [shellescape ${package.resources}] -i [shellescape ${workpath}/Info.plist] -d [shellescape ${workpath}/Description.plist]"
         }
 
         file delete ${workpath}/Info.plist \
