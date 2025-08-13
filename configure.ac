@@ -223,6 +223,7 @@ MP_PATH_MPCONFIGDIR
 
 # Check whether to install without root privileges
 MP_CHECK_NOROOTPRIVILEGES
+AC_SUBST(NO_ROOTPRIVS)
 
 # Check for install ownership
 MP_CHECK_INSTALLUSER

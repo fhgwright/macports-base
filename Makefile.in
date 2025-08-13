@@ -18,7 +18,7 @@ all:: Mk/macports.autoconf.mk
 
 Mk/macports.autoconf.mk: Mk/macports.autoconf.mk.in src/config.h.in Makefile.in doc/Makefile.in src/Makefile.in src/cregistry/Makefile.in src/darwintracelib1.0/Makefile.in src/machista1.0/Makefile.in src/macports1.0/Makefile.in src/mpcommon1.0/Makefile.in src/package1.0/Makefile.in src/pextlib1.0/Makefile.in src/portlist1.0/Makefile.in src/port/Makefile.in src/port1.0/Makefile.in src/programs/Makefile.in src/programs/daemondo/Makefile.in src/registry2.0/Makefile.in tests/Makefile.in vendor/Makefile.in config.status
 	./config.status
-	${MAKE} clean
+	"$(MAKE)" clean
 
 config.status: configure
 	@if test -f ./config.status ; then	\
@@ -45,6 +45,7 @@ install::
 	$(INSTALL)    -o "${DSTUSR}" -g "${DSTGRP}" -m 444 $(srcdir)/keys/archives/*.pub  "$(DESTDIR)${datadir}/macports/keys/archives/"
 # Only run these scripts when not building in a destroot
 ifeq ($(DESTDIR),)
+ifeq (@NO_ROOTPRIVS@,)
 # create run user if it doesn't exist
 	@if test `id -u` -eq 0; then \
         if test -n "${DSCL}" -a -n "${DSEDITGROUP}" ; then \
@@ -101,6 +102,7 @@ ifeq ($(DESTDIR),)
     else \
         echo "Not creating or updating user or group \"${RUNUSR}\" (not root)" ; \
     fi
+endif
 # Move ping cache to new location
 	@if [ -f "${localstatedir}/macports/pingtimes" ]; then \
         mv "${localstatedir}/macports/pingtimes" "${localstatedir}/macports/cache/pingtimes"; \
@@ -172,7 +174,7 @@ test::
 codesign::
 	@for subdir in vendor src/darwintracelib1.0 src/machista1.0 src/macports1.0 src/registry2.0 src/pextlib1.0 src/programs src/port ; do\
 		echo ===\> making $@ in ${DIRPRFX}$$subdir; \
-		( cd $$subdir && $(MAKE) DIRPRFX=${DIRPRFX}$$subdir/ $@) || exit 1; \
+		( cd $$subdir && "$(MAKE)" DIRPRFX="${DIRPRFX}$$subdir/" $@) || exit 1; \
 	done
 
 .PHONY: dist _gettag _pkgdist _dopkg docs codesign
