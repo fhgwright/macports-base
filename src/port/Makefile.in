@@ -1,0 +1,47 @@
+srcdir = @srcdir@
+VPATH  = @srcdir@
+
+include ../../Mk/macports.autoconf.mk
+
+INSTALLDIR=	${prefix}
+TOPSRCDIR=	../..
+SCRIPTS=	portmirror portindex port port-tclsh
+
+edit = sed -e 's,@TCLSH\@,$(TCLSH),g'
+
+.PHONY: mkdirs
+
+all: ${SCRIPTS}
+
+portmirror: portmirror.tcl ../../Mk/macports.autoconf.mk
+	${edit} $(srcdir)/portmirror.tcl > $@
+
+portindex: portindex.tcl ../../Mk/macports.autoconf.mk
+	${edit} $(srcdir)/portindex.tcl > $@
+
+port: port.tcl ../../Mk/macports.autoconf.mk
+	${edit} $(srcdir)/port.tcl > $@
+
+mkdirs:
+	< ../../doc/prefix.mtree $(MTREE) -U -d -e -p "${DESTDIR}${INSTALLDIR}" > /dev/null
+	< ../../doc/base.mtree $(MTREE) -U -d -e -p "${DESTDIR}${INSTALLDIR}" > /dev/null
+
+clean:
+	rm -f ${SCRIPTS}
+
+test:
+
+distclean: clean
+	rm -f Makefile
+
+install: all mkdirs
+	$(INSTALL) -d -o "${DSTUSR}" -g "${DSTGRP}" -m "${DSTMODE}" "${DESTDIR}${bindir}"
+	$(INSTALL) -d -o "${DSTUSR}" -g "${DSTGRP}" -m "${DSTMODE}" "${DESTDIR}${localstatedir}/macports"
+	$(INSTALL)    -o "${DSTUSR}" -g "${DSTGRP}" -m 555 port portindex portmirror port-tclsh "${DESTDIR}${bindir}/"
+	$(LN_S) -f port "${DESTDIR}${bindir}/portf"
+ifeq (darwin,@OS_PLATFORM@)
+	chmod -h 555 "${DESTDIR}${bindir}/portf"
+endif
+
+codesign:: port-tclsh
+	../codesign.sh $?

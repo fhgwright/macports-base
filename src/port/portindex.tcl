@@ -1,0 +1,491 @@
+#!@TCLSH@
+# -*- coding: utf-8; mode: tcl; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- vim:fenc=utf-8:ft=tcl:et:sw=4:ts=4:sts=4
+# Traverse through all ports, creating an index and archiving port directories
+# if requested
+
+package require macports
+package require Thread
+
+# Globals
+set full_reindex 0
+set permit_error 0
+set stats [dict create \
+           total 0 \
+           failed 0 \
+           skipped 0]
+set extended_mode 0
+array set ui_options        [list ports_no_old_index_warning 1]
+array set global_options    [list ports_no_load_quick_index 1]
+set var_overrides           [list]
+
+# Pass global options into mportinit
+mportinit ui_options global_options
+
+# Standard procedures
+proc print_usage {} {
+    puts "Usage: $::argv0 \[-defx\] \[-o output directory\] \[-p plat_ver_arch\] \[directory\]"
+    puts "-d:\tOutput debugging information"
+    puts "-e:\tExit code indicates if ports failed to parse"
+    puts "-f:\tDo a full re-index instead of updating"
+    puts "-o:\tOutput all files to specified directory"
+    puts "-p:\tPretend to be on another platform"
+    puts "-q:\tQuiet mode - only output errors and summary"
+    puts "-x:\tInclude extra (optional) information in the PortIndex, like variant description and port notes."
+}
+
+proc _write_index {name len line} {
+    global fd
+    puts $fd [list $name $len]
+    puts $fd $line
+}
+
+# Code that runs in worker threads
+set worker_init_script {
+
+package require macports
+package require Thread
+
+proc _read_index {idx} {
+    global qindex oldfd
+    set offset [dict get $qindex $idx]
+    seek $oldfd $offset
+    gets $oldfd in_line
+    lassign $in_line name len
+    set out_line [read $oldfd [expr {$len - 1}]]
+
+    return [list $name $len $out_line]
+}
+
+proc _index_from_portinfo {portinfo {is_subport no}} {
+    global keepkeys
+    set keep_portinfo [dict filter $portinfo script {key val} {
+        dict exists $keepkeys $key
+    }]
+
+    # if this is not a subport, add the "subports" key
+    if {!$is_subport && [dict exists $portinfo subports]} {
+        dict set keep_portinfo subports [dict get $portinfo subports]
+    }
+
+    set len [expr {[string length $keep_portinfo] + 1}]
+    return [list [dict get $portinfo name] $len $keep_portinfo]
+}
+
+proc _open_port {portdir absportdir {subport {}}} {
+    global macports::prefix
+    # Make sure $prefix expands to '${prefix}' so that the PortIndex is
+    # portable across prefixes, see https://trac.macports.org/ticket/53169 and
+    # https://trac.macports.org/ticket/17182.
+    set save_prefix $prefix
+    try {
+        set prefix {${prefix}}
+        if {$subport ne {}} {
+            set port_options [dict create subport $subport]
+        } else {
+            set port_options {}
+        }
+        set mport [mportopen file://$absportdir $port_options]
+    } finally {
+        # Restore prefix to the previous value
+        set prefix $save_prefix
+    }
+
+    set portinfo [mportinfo $mport]
+    mportclose $mport
+
+    dict set portinfo portdir $portdir
+    return $portinfo
+}
+
+proc pindex {portdir {subport {}}} {
+    try {
+        global directory full_reindex oldmtime qindex
+
+        set absportdir [file join $directory $portdir]
+        set portfile [file join $absportdir Portfile]
+        if {$subport ne ""} {
+            set qname [string tolower $subport]
+            set is_subport 1
+        } else {
+            set qname [string tolower [file tail $portdir]]
+            set is_subport 0
+        }
+
+        # Return values
+        set subports {}
+        set mtime [file mtime $portfile]
+
+        # try to reuse the existing entry if it's still valid
+        if {$full_reindex != 1 && [dict exists $qindex $qname] && $oldmtime >= $mtime} {
+            global ui_options
+            try {
+                lassign [_read_index $qname] name len portinfo
+
+                # reuse entry if it was made from the same portdir
+                if {[dict exists $portinfo portdir] && [dict get $portinfo portdir] eq $portdir} {
+                    set output [list $name $len $portinfo]
+
+                    if {!$is_subport} {
+                        if {[info exists ui_options(ports_debug)]} {
+                            puts "Reusing existing entry for $portdir"
+                        }
+
+                        # report any subports
+                        if {[dict exists $portinfo subports]} {
+                            set subports [dict get $portinfo subports]
+                        }
+                    }
+
+                    return [list -1 $output $subports $mtime]
+                }
+            } on error {} {
+                ui_warn "Failed to open old entry for ${portdir}, making a new one"
+                if {[info exists ui_options(ports_debug)]} {
+                    puts "$::errorInfo"
+                }
+            }
+        }
+
+        try {
+            set portinfo [_open_port $portdir $absportdir $subport]
+            set output [_index_from_portinfo $portinfo $is_subport]
+
+            # report this portfile's subports (if any)
+            if {!$is_subport && [dict exists $portinfo subports]} {
+                set subports [dict get $portinfo subports]
+            }
+        } on error {eMessage} {
+            set subportmsg [expr {$is_subport ? " with subport '${subport}'" : {}}]
+            set output "Failed to parse file $portdir/Portfile${subportmsg}: $eMessage"
+            return [list 1 $output {} 0]
+        }
+
+        return [list 0 $output $subports $mtime]
+    } on error {eMessage} {
+        set subportmsg [expr {$subport ne {} ? " with subport '${subport}'" : {}}]
+        set output "Failed to parse file $portdir/Portfile${subportmsg}: $eMessage"
+        return [list 1 $output {} 0]
+    }
+}
+
+}
+# End worker_init_script
+
+proc init_threads {} {
+    global worker_init_script qindex keepkeys ui_options \
+           global_options var_overrides directory full_reindex oldfd \
+           oldmtime maxjobs poolid pending_jobs subports_todo
+    append worker_init_script \
+        [list set qindex $qindex] \n \
+        [list set keepkeys $keepkeys] \n \
+        [list array set ui_options [array get ui_options]] \n \
+        [list array set global_options [array get global_options]] \n \
+        [list set directory $directory] \n \
+        [list set full_reindex $full_reindex] \n \
+        [list mportinit ui_options global_options]
+    if {[info exists oldfd]} {
+        global outpath
+        append worker_init_script \n \
+            [list set outpath $outpath] \n \
+            {set oldfd [open $outpath r]}
+    }
+    if {[info exists oldmtime]} {
+        append worker_init_script \
+            \n [list set oldmtime $oldmtime]
+    }
+    if {$var_overrides ne {}} {
+        append worker_init_script \
+            \n [list macports::override_vars $var_overrides]
+    }
+    set maxjobs [macports::get_parallel_jobs no]
+    set poolid [tpool::create -minworkers 1 -maxworkers $maxjobs -initcmd $worker_init_script]
+    set pending_jobs [dict create]
+    set subports_todo [list]
+}
+
+proc handle_completed_jobs {} {
+    global poolid pending_jobs maxjobs subports_todo stats ui_options
+    set completed_jobs [tpool::wait $poolid [dict keys $pending_jobs]]
+    macports::check_signals
+    set subports_done 0
+    foreach completed_job $completed_jobs {
+        lassign [dict get $pending_jobs $completed_job] portdir subport
+        dict unset pending_jobs $completed_job
+        if {[catch {tpool::get $poolid $completed_job} result]} {
+            set status 1
+            set subportmsg [expr {$subport ne {} ? " with subport '${subport}'" : {}}]
+            set output "Failed to parse file ${portdir}/Portfile${subportmsg}: $result"
+        } else {
+            lassign $result status output subports mtime
+        }
+        # -1 = skipped, 0 = success, 1 = fail
+        if {$status == 1} {
+            dict incr stats failed
+            dict incr stats total
+            puts stderr $output
+        } elseif {$status == 0 || $status == -1} {
+            # queue jobs for subports
+            if {$subport eq {}} {
+                foreach nextsubport $subports {
+                    lappend subports_todo [list $portdir $nextsubport]
+                }
+            }
+            if {$status == -1} {
+                dict incr stats skipped
+            } else {
+                if {![info exists ui_options(ports_quiet)]} {
+                    set port_term [expr {$subport ne {} ? "subport $subport" : "port $portdir"}]
+                    puts "Adding $port_term"
+                }
+                global newest
+                dict incr stats total
+                if {$mtime > $newest} {
+                    set newest $mtime
+                }
+            }
+            _write_index {*}$output
+        } else {
+            error "Unknown status for job $completed_job (${portdir} $subport): $status"
+        }
+        if {[llength $subports_todo] > $subports_done} {
+            set next_subport_info [lindex $subports_todo $subports_done]
+            set jobid [tpool::post $poolid [list pindex {*}$next_subport_info]]
+            dict set pending_jobs $jobid $next_subport_info
+            incr subports_done
+        }
+    }
+    while {[llength $subports_todo] > $subports_done && [dict size $pending_jobs] < $maxjobs} {
+        set next_subport_info [lindex $subports_todo $subports_done]
+        set jobid [tpool::post $poolid [list pindex {*}$next_subport_info]]
+        dict set pending_jobs $jobid $next_subport_info
+        incr subports_done
+    }
+    if {$subports_done > 0} {
+        set subports_todo [lrange $subports_todo $subports_done end]
+    }
+}
+
+# post new job to the pool
+proc pindex_queue {portdir} {
+    global pending_jobs maxjobs poolid exit_fail
+    # Wait for a free thread
+    while {[dict size $pending_jobs] >= $maxjobs} {
+        handle_completed_jobs
+    }
+    if {$exit_fail} {
+        error "Interrupt"
+    }
+
+    # Now queue the new job.
+    set jobid [tpool::post $poolid [list pindex $portdir {}]]
+    dict set pending_jobs $jobid [list $portdir {}]
+}
+
+proc process_remaining {} {
+    global pending_jobs poolid
+    # let remaining jobs finish
+    while {[dict size $pending_jobs] > 0} {
+        handle_completed_jobs
+    }
+    tpool::release $poolid
+}
+
+if {$argc > 8} {
+    print_usage
+    exit 1
+}
+
+proc parse_args {} {
+    global argc argv
+    for {set i 0} {$i < $argc} {incr i} {
+        set arg [lindex $argv $i]
+        switch -glob -- $arg {
+            -d { # Turn on debug output
+                global ui_options
+                set ui_options(ports_debug) yes
+            }
+            -e { # Non-zero exit code on errors
+                global permit_error
+                set permit_error 1
+            }
+            -f { # Completely rebuild index
+                global full_reindex
+                set full_reindex 1
+            }
+            -o { # Set output directory
+                incr i
+                global outdir
+                if {[string index [lindex $argv $i] 0] ne "/"} {
+                    set outdir [file join [pwd] [lindex $argv $i]]
+                } else {
+                    set outdir [lindex $argv $i]
+                }
+            }
+            -p { # Simulate platform
+                global var_overrides
+                incr i
+                set plat_arg [lindex $argv $i]
+                if {[string match file:* $plat_arg]} {
+                    # Read variables to override from a file
+                    set filename [string range $plat_arg [string first : $plat_arg]+1 end]
+                    set fd [open $filename r]
+                    gets $fd var_overrides
+                    close $fd
+                } else {
+                    # Use basic variable overrides based on platform name
+                    set platlist [split $plat_arg _]
+                    if {[llength $platlist] != 3} {
+                        puts stderr "Platform specifier should be of the form plat_ver_arch"
+                        print_usage
+                        exit 1
+                    }
+                    set os_platform [lindex $platlist 0]
+                    set os_major [lindex $platlist 1]
+                    if {$os_platform eq "macosx"} {
+                        set cxx_stdlib [expr {$os_major < 10 ? "libstdc++" : "libc++"}]
+                        lappend var_overrides os_subplatform $os_platform \
+                                              cxx_stdlib $cxx_stdlib
+                        set os_platform darwin
+                    }
+                    set os_arch [lindex $platlist 2]
+                    lappend var_overrides os_platform $os_platform \
+                                          os_major $os_major \
+                                          os_version ${os_major}.0.0 \
+                                          os_arch $os_arch
+                }
+            }
+            -q { # Enable quiet mode
+                global ui_options
+                set ui_options(ports_quiet) yes
+            }
+            -x { # Build extended portindex (include extra information , eg.: notes, variant description, conflicts etc.)
+                global extended_mode
+                set extended_mode 1
+            }
+            -* {
+                puts stderr "Unknown option: $arg"
+                print_usage
+                exit 1
+            }
+            default {
+                global directory
+                if {[string index $arg 0] ne "/"} {
+                    set directory [file join [pwd] $arg]
+                } else {
+                    set directory $arg
+                }
+            }
+        }
+    }
+}
+parse_args
+
+if {![info exists directory]} {
+    set directory .
+}
+
+# cd to input directory
+if {[catch {cd $directory} result]} {
+    puts stderr "$result"
+    exit 1
+} else {
+    set directory [pwd]
+}
+
+# Set output directory to full path
+if {[info exists outdir]} {
+    if {[catch {file mkdir $outdir} result]} {
+        puts stderr "$result"
+        exit 1
+    }
+    if {[catch {cd $outdir} result]} {
+        puts stderr "$result"
+        exit 1
+    } else {
+        set outdir [pwd]
+    }
+} else {
+    set outdir $directory
+}
+
+puts "Creating port index in $outdir"
+set outpath [file join $outdir PortIndex]
+# open old index for comparison
+set qindex ""
+if {[file isfile $outpath]} {
+    set oldmtime [file mtime $outpath]
+    set attrlist [list -permissions]
+    if {[getuid] == 0} {
+        lappend attrlist -owner -group
+    }
+    foreach attr $attrlist {
+        lappend oldattrs $attr [file attributes $outpath $attr]
+    }
+    set newest $oldmtime
+    if {![catch {open $outpath r} oldfd]} {
+        if {![file isfile ${outpath}.quick]} {
+            catch {set qindex [dict create {*}[mports_generate_quickindex ${outpath}]]}
+        } elseif {![catch {open ${outpath}.quick r} quickfd]} {
+            catch {set qindex [dict create {*}[read -nonewline $quickfd]]}
+            close $quickfd
+        }
+    }
+} else {
+    set newest 0
+    set oldattrs [list -permissions 00644]
+}
+
+set fd [file tempfile tempportindex mports.portindex.XXXXXXXX]
+
+# keys for a normal portindex
+set keepkeys [dict create]
+foreach key {categories depends_fetch depends_extract depends_patch \
+             depends_build depends_lib depends_run depends_test \
+             description epoch homepage long_description maintainers \
+             name platforms revision variants version portdir \
+             replaced_by license installs_libs conflicts known_fail} {
+    dict set keepkeys $key 1
+}
+
+# additional keys for extended portindex (with extra information)
+if {$extended_mode} {
+    foreach key {vinfo notes} {
+        dict set keepkeys $key 1
+    }
+}
+
+set exit_fail 0
+try {
+    init_threads
+    # process list of portdirs
+    mporttraverse pindex_queue $directory
+    # handle completed jobs
+    process_remaining
+} trap {POSIX SIG SIGINT} {} {
+    puts stderr "SIGINT received, terminating."
+    set exit_fail 1
+} trap {POSIX SIG SIGTERM} {} {
+    puts stderr "SIGTERM received, terminating."
+    set exit_fail 1
+} finally {
+    if {[info exists oldfd]} {
+        close $oldfd
+    }
+    close $fd
+}
+if {$exit_fail} {
+    exit 1
+}
+
+file rename -force $tempportindex $outpath
+file mtime $outpath $newest
+file attributes $outpath {*}$oldattrs
+mports_generate_quickindex $outpath
+puts "\nTotal number of ports parsed:\t[dict get $stats total]\
+      \nPorts successfully parsed:\t[expr {[dict get $stats total] - [dict get $stats failed]}]\
+      \nPorts failed:\t\t\t[dict get $stats failed]\
+      \nUp-to-date ports skipped:\t[dict get $stats skipped]\n"
+
+if {${permit_error} && [dict get $stats failed] > 0} {
+    exit 2
+}
