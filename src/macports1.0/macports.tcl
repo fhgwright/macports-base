@@ -2889,9 +2889,10 @@ proc macports::async_fetch_mport {target mport} {
     } then {
         $workername eval [list portarchivefetch::archivefetch_async_start]
     }
-    if {[_target_needs_deps $target] && (![dict exists $no_build_targets $target]
+    if {([_target_needs_deps $target] && (![dict exists $no_build_targets $target]
          || (![global_option_isset ports_binary_only] && ![_mportinstalled $mport]
-         && ![$workername eval [list _archive_available]]))
+         && ![$workername eval [list _archive_available]])))
+         || $target eq "mirror"
     } then {
         $workername eval [list portfetch::fetch_async_start]
     }
@@ -3755,8 +3756,13 @@ proc mportsync {{options {}}} {
                             }
                         }
                         file delete -force ${extractdir}/tmp
-                        # use -k to skip extracting files that exist
-                        set kflag k
+                        # use -k if supported to skip extracting files that exist
+                        global macports::prefix_frozen
+                        if {[string match ${prefix_frozen}/bin/* $tar]} {
+                            set kflag k
+                        } else {
+                            set kflag $macports::autoconf::tar_k
+                        }
                     }
 
                     set tar_cmd "$tar -C ${extractdir} -x${zflag}${kflag}f $tarball"
@@ -3868,19 +3874,19 @@ proc mportsync {{options {}}} {
                     incr numfailed
                     continue
                 }
-                # TODO: signatures are not yet deployed for daily tarball
-                #macports_try -pass_signal {
-                #    curl fetch {*}$progressflag ${source}.sig ${tarpath}.sig
-                #} on error {eMessage} {
-                #    ui_error [msgcat::mc "Fetching %s failed: %s" ${source}.sig $eMessage]
-                #    incr numfailed
-                #    continue
-                #}
-                #if {[catch {macports::verify_ports_signature $tarpath}]} {
-                #    ui_error "Verifying signature failed for ${source}"
-                #    incr numfailed
-                #    continue
-                #}
+
+                macports_try -pass_signal {
+                    curl fetch {*}$progressflag ${source}.sig ${tarpath}.sig
+                } on error {eMessage} {
+                    ui_error [msgcat::mc "Fetching %s failed: %s" ${source}.sig $eMessage]
+                    incr numfailed
+                    continue
+                }
+                if {[catch {macports::verify_ports_signature $tarpath}]} {
+                    ui_error "Verifying signature failed for ${source}"
+                    incr numfailed
+                    continue
+                }
 
                 set extflag {}
                 switch -- $extension {
@@ -5679,11 +5685,15 @@ proc macports::_exec_upgrade {oplist upgrade_count} {
                         ui_debug $::errorInfo
                         ui_error "Unable to exec port: $result"
                         set status 1
-                        break
+                        if {![macports::ui_isset ports_processall]} {
+                            break
+                        }
                     } elseif {$result != 0} {
                         ui_error "Problem while installing $portname @$port_full_vers"
                         set status $result
-                        break
+                        if {![macports::ui_isset ports_processall]} {
+                            break
+                        }
                     }
                 }
                 activate_only {
@@ -5708,7 +5718,9 @@ proc macports::_exec_upgrade {oplist upgrade_count} {
                         set port_full_vers [dict get $portinfo version]_[dict get $portinfo revision][dict get $portinfo canonical_active_variants]
                         ui_error "Couldn't activate $portname @${port_full_vers}: $result"
                         set status 1
-                        break
+                        if {![macports::ui_isset ports_processall]} {
+                            break
+                        }
                     }
                 }
                 deactivate {
@@ -5722,7 +5734,9 @@ proc macports::_exec_upgrade {oplist upgrade_count} {
                         ui_debug $::errorInfo
                         ui_error "Deactivating $portname @${version}_${revision}${variants} failed: $result"
                         set status 1
-                        break
+                        if {![macports::ui_isset ports_processall]} {
+                            break
+                        }
                     }
                 }
                 install {
@@ -5760,15 +5774,21 @@ proc macports::_exec_upgrade {oplist upgrade_count} {
                             set binary_only [lindex $op 4]
                             if {$binary_only} {
                                 set status 1
-                                break
+                                if {![macports::ui_isset ports_processall]} {
+                                    break
+                                }
                             }
                             if {[catch {mportexec $mport destroot} result]} {
                                 ui_debug $::errorInfo
                                 set status 1
-                                break
+                                if {![macports::ui_isset ports_processall]} {
+                                    break
+                                }
                             } elseif {$result != 0} {
                                 set status 1
-                                break
+                                if {![macports::ui_isset ports_processall]} {
+                                    break
+                                }
                             }
                         }
                     } else {
@@ -5777,10 +5797,14 @@ proc macports::_exec_upgrade {oplist upgrade_count} {
                         if {[catch {mportexec $mport install} result]} {
                             ui_debug $::errorInfo
                             set status 1
-                            break
+                            if {![macports::ui_isset ports_processall]} {
+                                break
+                            }
                         } elseif {$result != 0} {
                             set status 1
-                            break
+                            if {![macports::ui_isset ports_processall]} {
+                                break
+                            }
                         }
                     }
                 }
@@ -5837,7 +5861,9 @@ proc macports::_exec_upgrade {oplist upgrade_count} {
                         ui_debug $::errorInfo
                         ui_error "Uninstall $portname ${version}_${revision}${variants} failed: $result"
                         set status 1
-                        break
+                        if {![macports::ui_isset ports_processall]} {
+                            break
+                        }
                     }
                 }
                 uninstall_other_vers {
@@ -5846,6 +5872,9 @@ proc macports::_exec_upgrade {oplist upgrade_count} {
                     if {[catch {registry::entry imaged $portname} ilist]} {
                         ui_error "Checking installed version of $portname failed: $ilist"
                         set status 1
+                        if {[macports::ui_isset ports_processall]} {
+                            continue
+                        }
                         break
                     }
                     foreach i $ilist {
@@ -5868,6 +5897,9 @@ proc macports::_exec_upgrade {oplist upgrade_count} {
                                 break
                             }
                         }
+                    }
+                    if {$status != 0 && ![macports::ui_isset ports_processall]} {
+                        break
                     }
                 }
             }
