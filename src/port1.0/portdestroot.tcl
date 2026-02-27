@@ -144,7 +144,9 @@ proc portdestroot::destroot_main {args} {
 
 proc portdestroot::destroot_finish {args} {
     global UI_PREFIX destroot prefix subport destroot.violate_mtree \
-           applications_dir frameworks_dir destroot.keepdirs destroot.delete_la_files
+           applications_dir frameworks_dir destroot.keepdirs \
+           destroot.delete_la_files install.user install.group \
+           macportsuser
     variable oldmask
 
     foreach fileToDelete {share/info/dir lib/charset.alias} {
@@ -157,9 +159,45 @@ proc portdestroot::destroot_finish {args} {
     # Prevent overlinking due to glibtool .la files: https://trac.macports.org/ticket/38010
     ui_debug "Fixing glibtool .la files in destroot for ${subport}"
     set la_file_list [list]
+    if {[getuid] == 0} {
+        set macports_uid [name_to_uid $macportsuser]
+        set macports_gid [uname_to_gid $macportsuser]
+        set fix_ownership 1
+    } else {
+        set fix_ownership 0
+    }
     fs-traverse -depth fullpath [list $destroot] {
-        if {[file extension $fullpath] eq ".la" && ([file type $fullpath] eq "file" || [file type $fullpath] eq "link")} {
-            if {[file type $fullpath] eq "link" && [file pathtype [file link $fullpath]] ne "relative"} {
+        file lstat $fullpath statinfo
+        # Ensure installed files are not owned by the unprivileged account
+        if {$fix_ownership && ($statinfo(uid) == $macports_uid || $statinfo(gid) == $macports_gid)} {
+            if {$statinfo(uid) == $macports_uid} {
+                ui_debug "Changing owner to ${install.user} for $fullpath"
+                set new_owner ${install.user}
+            } else {
+                # only group needs to be changed
+                set new_owner [name_to_uid $statinfo(uid)]
+            }
+            if {$statinfo(gid) == $macports_gid} {
+                ui_debug "Changing group to ${install.group} for $fullpath"
+                set new_group ${install.group}
+            } else {
+                # only owner needs to be changed
+                set new_group [name_to_gid $statinfo(gid)]
+            }
+            # Changing owner may also change permissions, so we restore
+            # them afterwards. 'file attributes' doesn't work on links
+            # (it operates on the link target instead) but links should
+            # not have setuid/setgid bits set anyway.
+            if {$statinfo(type) ne "link"} {
+                set saved_perms [file attributes $fullpath -permissions]
+            }
+            lchown $fullpath $new_owner $new_group
+            if {$statinfo(type) ne "link"} {
+                file attributes $fullpath -permissions $saved_perms
+            }
+        }
+        if {[file extension $fullpath] eq ".la" && $statinfo(type) in {file link}} {
+            if {$statinfo(type) eq "link" && [file pathtype [file link $fullpath]] ne "relative"} {
                 # prepend $destroot to target of absolute symlinks
                 set checkpath ${destroot}[file link $fullpath]
             } else {
