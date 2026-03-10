@@ -2132,6 +2132,7 @@ proc macports::worker_init {workername portpath porturl portbuildpath options va
     $workername alias curlwrap_async_cancel macports::curlwrap_async_cancel
     $workername alias curlwrap_async_is_complete macports::curlwrap_async_is_complete
     $workername alias curlwrap_async_show_progress macports::curlwrap_async_show_progress
+    $workername alias curlwrap_async_file_is_in_progress macports::curlwrap_async_file_is_in_progress
 
     foreach opt $portinterp_options {
         if {![info exists $opt]} {
@@ -2272,6 +2273,11 @@ proc macports::curlwrap_async_is_complete {id args} {
 # Start displaying progress for an operation.
 proc macports::curlwrap_async_show_progress {id} {
     return [mport_fetch_thread::show_progress $id]
+}
+
+# Check if a transfer is in progress for a file
+proc macports::curlwrap_async_file_is_in_progress {path} {
+    return [mport_fetch_thread::file_is_in_progress $path]
 }
 
 ##
@@ -3113,6 +3119,7 @@ proc macports::_upgrade_mport_deps {mport target} {
 
     set depnames_to_upgrade [list]
     set depdict [dict create]
+    set msg_printed 0
 
     try {
     foreach deptypes $deptypes_lists check_archive {no yes} {
@@ -3216,7 +3223,10 @@ proc macports::_upgrade_mport_deps {mport target} {
         if {[llength $depnames_to_upgrade] > 0} {
             variable ui_prefix
             set portname [dict get $portinfo name]
-            ui_msg "$ui_prefix Upgrading already installed dependencies of $portname"
+            if {!$msg_printed} {
+                ui_msg "$ui_prefix Upgrading already installed dependencies of $portname"
+                set msg_printed 1
+            }
             set status [macports::upgrade_multi $depnames_to_upgrade $depdict $options]
             if {$status != 0 && ![macports::ui_isset ports_processall]} {
                 return -code error "upgrading deps for $portname failed"
@@ -5611,6 +5621,7 @@ proc macports::_exec_upgrade {oplist upgrade_count} {
     set status 0
     set upgrade_index 0
     set all_mports [dict create]
+    set fetched_mports [dict create]
     set loaded_startupitems [dict create]
     set ports_to_upgrade [list]
     set ports_to_install [list]
@@ -5630,14 +5641,16 @@ proc macports::_exec_upgrade {oplist upgrade_count} {
                     } elseif {$opname in {activate_only install} && ![dict exists $all_mports $mport]} {
                         lappend ports_to_upgrade [ditem_key $mport provides]
                     }
-                    if {$opname in {activate install}} {
+                    if {$opname in {activate install} && ![dict exists $fetched_mports $mport]} {
                         # Start background fetch of files
                         async_fetch_mport activate $mport
+                        dict set fetched_mports $mport 1
                     }
                     dict set all_mports $mport 0
                 }
             }
         }
+        unset fetched_mports
 
         set to_install_len [llength $ports_to_install]
         set to_upgrade_len [llength $ports_to_upgrade]
