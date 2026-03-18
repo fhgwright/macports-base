@@ -103,6 +103,10 @@ esac
 
 # Checks for programs.
 AC_PROG_CC([clang cc gcc])
+# Remove automatically added C standard option
+AC_MSG_CHECKING([CC without -std])
+[CC=$(echo "$CC" | sed -E "s/[[:space:]]+-std=(gnu|c)$(echo "$ac_prog_cc_stdc" | tr -d c)//")]
+AC_MSG_RESULT([$CC])
 AC_PROG_GREP
 AC_PROG_INSTALL
 AC_PROG_LN_S
@@ -401,7 +405,7 @@ if test "$CRITCL_PLATFORMS" = "" -a "$OS_PLATFORM" = darwin; then
 fi
 CRITCL_PLATFORMS="$(echo "$CRITCL_PLATFORMS" | \
     sed -E -e 's/macosx-a(rm|arch)64/macosx-aarch64 macosx-arm macosx-arm64/' \
-        -e 's/macosx-i[3-6]86/macosx-ix86/' \
+        -e 's/macosx-i[[3-6]]86/macosx-ix86/' \
         -e 's/macosx-ppc/macosx-powerpc/' \
         | tr '\n' ' ')"
 AC_SUBST(CRITCL_PLATFORMS)

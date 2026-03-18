@@ -311,8 +311,9 @@ proc portarchivefetch::fetchfiles {{async no} args} {
     }
     set sorted no
 
-    set existing_archive [find_portarchive_path]
-    if {$existing_archive eq "" && ![tbool force_archive_refresh]
+    set include_installed [expr {![tbool force_archive_refresh]}]
+    set existing_archive [find_portarchive_path $include_installed]
+    if {$existing_archive eq "" && $include_installed
         && [file isdirectory [file rootname [get_portimage_path]]]} {
         set existing_archive yes
     }
@@ -504,7 +505,9 @@ proc portarchivefetch::archivefetch_async_start {} {
 proc portarchivefetch::_async_cleanup {} {
     variable async_job
     if {[info exists async_job]} {
-        curlwrap_async_cancel [lindex $async_job 0]
+        lassign $async_job jobid tmpfiles
+        curlwrap_async_cancel $jobid
+        file delete {*}$tmpfiles
         unset async_job
     }
 }
