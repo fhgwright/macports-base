@@ -635,13 +635,12 @@ proc get_outdated_ports {} {
         if { $comp_result == 0 } {
             set comp_result [expr {[$i revision] - $latest_revision}]
         }
-        if {$comp_result == 0} {
-            if {([$i os_platform] ni [list any "" 0] && [$i os_major] ni [list "" 0]
+        if {$comp_result == 0 && (([$i os_platform] ni [list any "" 0] && [$i os_major] ni [list "" 0]
                 && ([$i os_platform] ne ${os_platform}
                     || ([$i os_major] ne "any" && [$i os_major] != ${os_major})))
-                || ([$i cxx_stdlib_overridden] == 0 && [$i cxx_stdlib] eq $wrong_stdlib)} {
-                set comp_result -1
-            }
+                || (([catch {$i cxx_stdlib_overridden} cxx_stdlib_overridden] || $cxx_stdlib_overridden == 0)
+                     && (![catch {$i cxx_stdlib} cxx_stdlib_installed] && $cxx_stdlib_installed eq $wrong_stdlib)))} {
+            set comp_result -1
         }
 
         # Add outdated ports to our results list
@@ -2805,6 +2804,7 @@ proc action_deps { action portlist opts } {
         if {!([dict exists $options ports_${action}_no-test] && [string is true -strict [dict get $options ports_${action}_no-test]])} {
             lappend deptypes depends_test
         }
+        set index_only [expr {[dict exists $options ports_${action}_index] && [dict get $options ports_${action}_index] eq "yes"}]
 
         set portinfo ""
         # If we have a url, use that, since it's most specific
@@ -2820,7 +2820,7 @@ proc action_deps { action portlist opts } {
             }
             lassign $result portname portinfo
             set porturl [dict get $portinfo porturl]
-        } elseif {$porturl ne "file://."} {
+        } elseif {$index_only} {
             # Extract the portdir from porturl and use it to search PortIndex.
             # Only the last two elements of the path (porturl) make up the
             # portdir.
@@ -2845,7 +2845,7 @@ proc action_deps { action portlist opts } {
             }
         }
 
-        if {!([dict exists $options ports_${action}_index] && [dict get $options ports_${action}_index] eq "yes")} {
+        if {!$index_only} {
             # Add any global_variations to the variations
             # specified for the port, so we get dependencies right
             set merged_variations [dict merge $gvariations $variations]
@@ -2931,7 +2931,7 @@ proc action_deps { action portlist opts } {
                     dict set options subport [dict get $portinfo name]
 
                     # open the portfile if requested
-                    if {!([dict exists $options ports_${action}_index] && [dict get $options ports_${action}_index] eq "yes")} {
+                    if {!$index_only} {
                         if {[catch {set mport [mportopen $porturl $options $merged_variations]} result]} {
                             ui_debug "$::errorInfo"
                             break_softcontinue "Unable to open port: $result" 1 status
@@ -3243,12 +3243,12 @@ proc action_outdated { action portlist opts } {
                         || ($os_major_installed ne "any" && $os_major_installed != ${os_major}))} {
                     set comp_result -1
                     set reason { (platform $os_platform_installed $os_major_installed != ${os_platform} ${os_major})}
-                } else {
-                    set cxx_stdlib_installed [$i cxx_stdlib]
-                    if {[$i cxx_stdlib_overridden] == 0 && $cxx_stdlib_installed eq $wrong_stdlib} {
-                        set comp_result -1
-                        set reason { (C++ stdlib $cxx_stdlib_installed != ${cxx_stdlib})}
-                    }
+                } elseif {![catch {$i cxx_stdlib} cxx_stdlib_installed]
+                          && $cxx_stdlib_installed eq $wrong_stdlib
+                          && ![catch {$i cxx_stdlib_overridden} cxx_stdlib_overridden]
+                          && $cxx_stdlib_overridden == 0} {
+                    set comp_result -1
+                    set reason { (C++ stdlib $cxx_stdlib_installed != ${cxx_stdlib})}
                 }
             }
 

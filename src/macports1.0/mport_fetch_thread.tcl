@@ -171,12 +171,10 @@ namespace eval mport_fetch_thread {
                                     break
                                 }
                             }
-                            foreach sigtype $sigtypes {
-                                if {!$sig_fetched || $sigtype ne $fetched_sigtype} {
+                            if {$cancelled} {
+                                foreach sigtype $sigtypes {
                                     catch {file delete ${outpath}.${sigtype}}
                                 }
-                            }
-                            if {!$archive_fetched} {
                                 catch {file delete ${outpath}.TMP}
                             }
                         }
@@ -209,7 +207,7 @@ namespace eval mport_fetch_thread {
                                     }
                                 }
                             }
-                            if {!$fetched} {
+                            if {$cancelled} {
                                 catch {file delete ${outpath}.TMP}
                             }
                         }
@@ -352,7 +350,7 @@ proc mport_fetch_thread::init_management_thread {args} {
 
 proc mport_fetch_thread::record_request {op opargs id} {
     variable active_requests
-    if {$op eq "fetch_file"} {
+    if {$op in {fetch_archive fetch_file}} {
         # record the file path
         set val [lindex $opargs 3]
         variable active_files
