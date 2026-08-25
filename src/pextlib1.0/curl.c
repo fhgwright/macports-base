@@ -506,6 +506,7 @@ CurlFetchCmd(Tcl_Interp* interp, int objc, Tcl_Obj* const objv[])
                 break;
             }
         }
+#if LIBCURL_VERSION_NUM >= 0x071304
         if (no_proxy) {
             theCurlCode = curl_easy_setopt(theHandle, CURLOPT_NOPROXY, no_proxy);
             if (theCurlCode != CURLE_OK) {
@@ -513,6 +514,7 @@ CurlFetchCmd(Tcl_Interp* interp, int objc, Tcl_Obj* const objv[])
                 break;
             }
         }
+#endif
 
 		/* -L option */
 		theCurlCode = curl_easy_setopt(theHandle, CURLOPT_FOLLOWLOCATION, 1);
@@ -1333,6 +1335,7 @@ CurlGetSizeCmd(Tcl_Interp* interp, int objc, Tcl_Obj* const objv[])
                 break;
             }
         }
+#if LIBCURL_VERSION_NUM >= 0x071304
         if (no_proxy) {
             theCurlCode = curl_easy_setopt(theHandle, CURLOPT_NOPROXY, no_proxy);
             if (theCurlCode != CURLE_OK) {
@@ -1340,6 +1343,7 @@ CurlGetSizeCmd(Tcl_Interp* interp, int objc, Tcl_Obj* const objv[])
                 break;
             }
         }
+#endif
 
 		/* -L option */
 		theCurlCode = curl_easy_setopt(theHandle, CURLOPT_FOLLOWLOCATION, 1);
