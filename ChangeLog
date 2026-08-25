@@ -2,7 +2,7 @@
 # This is a log of major user-visible changes in each MacPorts release.
 ###
 
-Release 2.12.6 (unreleased)
+Release 2.12.6 (2026-08-26 by jmr)
     - Fixed potential unreliable application of network proxy settings
       with background fetches. (jmr in 6d9edb0)
 
