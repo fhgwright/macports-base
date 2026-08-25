@@ -100,6 +100,10 @@ namespace eval macports {
     variable portinterp_deferred_options [list developer_dir xcodeversion xcodebuildcmd \
                                                xcodecltversion xcode_license_unaccepted]
 
+    # Network proxies to use
+    variable proxies [dict create]
+    variable no_proxy {}
+
     # maps porturls to the list of open mports with each url
     variable open_mports [dict create]
 
@@ -1066,6 +1070,7 @@ proc mportinit {{up_ui_options {}} {up_options {}} {up_variations {}}} {
     package require registry 1.0
     package require registry2 2.0
     package require machista 1.0
+    package require uri
 
     # Set the system encoding to utf-8
     encoding system utf-8
@@ -1840,6 +1845,9 @@ match macports.conf.default."
             set env(http_proxy) $sysConfProxies(proxy_http)
         }
     }
+    if {[info exists env(http_proxy)]} {
+        dict set ::macports::proxies http $env(http_proxy)
+    }
     if {(![info exists env(https_proxy)] && ![info exists env(HTTPS_PROXY)]) || $proxy_override_env} {
         unset -nocomplain env(https_proxy)
         if {[info exists proxy_https]} {
@@ -1856,6 +1864,16 @@ match macports.conf.default."
             set env(FTP_PROXY) $sysConfProxies(proxy_ftp)
         }
     }
+    foreach proxytype {https ftp all} {
+        if {[info exists env(${proxytype}_proxy)]} {
+            dict set ::macports::proxies $proxytype $env(${proxytype}_proxy)
+            continue
+        }
+        set proxytype_upper [string toupper $proxytype]
+        if {[info exists env(${proxytype_upper}_PROXY)]} {
+            dict set ::macports::proxies $proxytype $env(${proxytype_upper}_PROXY)
+        }
+    }
     if {![info exists env(RSYNC_PROXY)] || $proxy_override_env} {
         if {[info exists proxy_rsync]} {
             set env(RSYNC_PROXY) $proxy_rsync
@@ -1868,6 +1886,11 @@ match macports.conf.default."
         } elseif {[info exists sysConfProxies(proxy_skip)]} {
             set env(NO_PROXY) $sysConfProxies(proxy_skip)
         }
+    }
+    if {[info exists env(no_proxy)]} {
+        set ::macports::no_proxy $env(no_proxy)
+    } elseif {[info exists env(NO_PROXY)]} {
+        set ::macports::no_proxy $env(NO_PROXY)
     }
 
     # add ccache to environment
@@ -2237,8 +2260,10 @@ proc macports::get_tar_flags {suffix} {
 # Private helper
 proc macports::_curlwrap_credential_args {site credentials} {
     variable fetch_credentials
-    if {[dict exists $fetch_credentials $site]} {
-        set credentials [dict get $fetch_credentials $site]
+    set url_parts [::uri::split $site]
+    set host [expr {[dict exists $url_parts host] ? [dict get $url_parts host] : {}}]
+    if {$host ne {} && [dict exists $fetch_credentials $host]} {
+        set credentials [dict get $fetch_credentials $host]
     }
     return [expr {$credentials ne {} ? [list -u $credentials] : {}}]
 }
@@ -3806,7 +3831,10 @@ proc mportsync {{options {}}} {
                         set index_source $source
                     }
                     set remote_indexdir "${index_source}PortIndex_${os_platform}_${os_major}_${os_arch}/"
-                    set rsync_commandline "$rsync_path $rsync_options $include_option $remote_indexdir $destdir"
+                    # Under some circumstances, there may be a preexisting PortIndex with the correct length
+                    # and mtime, but incorrect content.  So we add the -I option to suppress skipping
+                    # based on length and time.  Comparison based on content alone isn't very expensive here.
+                    set rsync_commandline "$rsync_path $rsync_options -I $include_option $remote_indexdir $destdir"
                     macports_try -pass_signal {
                         macports::run_unprivileged {system -W ${portdbpath}/home $rsync_commandline}
                         
