@@ -1899,7 +1899,7 @@ namespace eval portlib {
             }
 
             if {${os_platform} eq "darwin"} {
-                set dscl [findBinary dscl $::portlib::autoconf::dscl_path]
+                set dscl [macports::findBinary dscl $::portlib::autoconf::dscl_path]
                 set failed? 0
                 macports_try {
                     exec -ignorestderr $dscl . -create /Users/${username} UniqueID ${uid}
@@ -2015,7 +2015,7 @@ namespace eval portlib {
             }
 
             if {${os_platform} eq "darwin"} {
-                set dscl [findBinary dscl $::portlib::autoconf::dscl_path]
+                set dscl [macports::findBinary dscl $::portlib::autoconf::dscl_path]
                 set failed? 0
                 macports_try {
                     exec -ignorestderr $dscl . -create /Groups/${groupname} Password ${passwd}
