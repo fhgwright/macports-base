@@ -875,9 +875,10 @@ proc portconfigure::get_compiler_fallback {} {
 }
 #
 proc portconfigure::get_fortran_fallback {} {
+    global porturl
     set compilers [list]
     set vmin [get_min_gfortran]
-    foreach c [get_gcc_compilers] {
+    foreach c [get_gcc_compilers $porturl] {
         set v    [lindex [split $c -] 2]
         if {[vercmp ${vmin} $v] <= 0} {
             lappend compilers $c
