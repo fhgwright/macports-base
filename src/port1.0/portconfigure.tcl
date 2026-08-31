@@ -762,6 +762,11 @@ proc portconfigure::g95_ok {} {
     return yes
 }
 
+proc compiler.command_line_tools_version {compiler} {
+    global configure.developer_dir
+    portconfigure::get_system_compiler_version $compiler ${configure.developer_dir}
+}
+
 # internal function to choose compiler fallback list based on platform
 proc portconfigure::get_compiler_fallback {} {
     global default_compilers porturl xcodeversion os.platform \
