@@ -7306,8 +7306,10 @@ proc macports::get_parallel_jobs {{mem_restrict yes}} {
         set jobs $buildmakejobs
     } elseif {$os_platform eq "darwin" && $buildmakejobs == 0
               && ![catch {sysctl hw.activecpu} cpus]} {
+        variable os_major
+        set sysctl_name [expr {$os_major >= 23 ? "hw.memsize_usable" : "hw.memsize"}]
         set jobs $cpus
-        if {$mem_restrict && ![catch {sysctl hw.memsize} memsize]
+        if {$mem_restrict && ![catch {sysctl $sysctl_name} memsize]
                 && $jobs > $memsize / (1024 * 1024 * 1024) + 1} {
             set jobs [expr {$memsize / (1024 * 1024 * 1024) + 1}]
         }
@@ -7413,12 +7415,17 @@ proc macports::get_compatible_xcode_versions {} {
         26 {
             set min 26.0
             set ok 26.0
-            set rec 26.0
+            set rec 26.6
+        }
+        27 {
+            set min 27.0
+            set ok 27.0
+            set rec 27.0
         }
         default {
-            set min 26.0
-            set ok 26.0
-            set rec 26.0
+            set min 27.0
+            set ok 27.0
+            set rec 27.0
         }
     }
     return [list $min $ok $rec]
